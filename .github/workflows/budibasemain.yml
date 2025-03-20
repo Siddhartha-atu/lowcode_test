@@ -9,7 +9,44 @@ on:
       - main
 
 jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the code
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Step 2: Validate .env file
+      - name: Validate .env file
+        run: |
+          if [ ! -f .env ]; then
+            echo "Error: .env file is missing!"
+            exit 1
+          fi
+          echo ".env file exists and is valid."
+
+      # Step 3: Validate docker-compose.yaml file
+      - name: Validate docker-compose.yaml
+        run: |
+          if ! docker-compose config; then
+            echo "Error: docker-compose.yaml is invalid!"
+            exit 1
+          fi
+          echo "docker-compose.yaml is valid."
+
+      # Step 4: Run static analysis on docker-compose.yaml
+      - name: Install yamllint
+        run: |
+          sudo apt update
+          sudo apt install -y yamllint
+
+      - name: Lint docker-compose.yaml
+        run: |
+          yamllint docker-compose.yaml
+
   deploy:
+    needs: ci  # Deploy only if CI passes
     runs-on: ubuntu-latest
 
     steps:
