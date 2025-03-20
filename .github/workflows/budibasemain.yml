@@ -28,14 +28,16 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      # Step 4: Build Docker images using docker compose
+      # Step 4: Build Docker images
       - name: Build Docker images
         run: |
           docker compose -f docker-compose.yaml build
-      # Step 5: Push Docker images to the registry
+
+      # Step 5: Push Docker images
       - name: Push Docker images
         run: |
           docker compose -f docker-compose.yaml push
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
@@ -51,7 +53,13 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      # Step 3: Deploy to EC2
+      # Step 3: Log in to Docker Hub on EC2
+      - name: Log in to Docker Hub on EC2
+        run: |
+          echo "Logging in to Docker Hub..."
+          ssh -o StrictHostKeyChecking=no ubuntu@ec2-3-248-193-143.eu-west-1.compute.amazonaws.com "echo '${{ secrets.DOCKER_HUB_TOKEN }}' | docker login -u '${{ secrets.DOCKER_HUB_USERNAME }}' --password-stdin"
+
+      # Step 4: Deploy to EC2
       - name: Deploy to EC2
         run: |
           echo "Deploying to EC2..."
