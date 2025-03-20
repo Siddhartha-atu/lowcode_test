@@ -28,15 +28,15 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      # Step 4: Build Docker images using docker compose
-      - name: Build Docker images
+      # Step 4: Build Docker image
+      - name: Build Docker image
         run: |
-          docker compose -f docker-compose.yaml build
+          docker build -t your-dockerhub-username/your-app-name:latest .
 
-      # Step 5: Push Docker images to the registry
-      - name: Push Docker images
+      # Step 5: Push Docker image to Docker Hub
+      - name: Push Docker image to Docker Hub
         run: |
-          docker compose -f docker-compose.yaml push
+          docker push your-dockerhub-username/your-app-name:latest
 
   deploy:
     needs: build
@@ -57,4 +57,4 @@ jobs:
       - name: Deploy to EC2
         run: |
           echo "Deploying to EC2..."
-          ssh -o StrictHostKeyChecking=no ubuntu@ec2-3-248-193-143.eu-west-1.compute.amazonaws.com "docker pull your-dockerhub-username/your-app-name:latest && docker-compose -f ~/my-app/docker-compose.yaml up -d"
+          ssh -o StrictHostKeyChecking=no ubuntu@ec2-3-248-193-143.eu-west-1.compute.amazonaws.com "sudo docker pull your-dockerhub-username/your-app-name:latest && sudo docker-compose -f ~/my-app/docker-compose.yaml up -d"
