@@ -30,18 +30,23 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/lowcode.pem
           chmod 600 ~/.ssh/lowcode.pem
 
-      # Step 4: Copy docker-compose.yaml to EC2
+      # Step 4: Create the directory on EC2
+      - name: Create directory on EC2
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-3-248-193-143.eu-west-1.compute.amazonaws.com "mkdir -p ~/my-app"
+
+      # Step 5: Copy docker-compose.yaml to EC2
       - name: Copy docker-compose.yaml to EC2
         run: |
           scp -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem docker-compose.yaml ubuntu@ec2-3-248-193-143.eu-west-1.compute.amazonaws.com:~/my-app/
 
-      # Step 5: Log in to Docker Hub on EC2 (if using private images)
+      # Step 6: Log in to Docker Hub on EC2 (if using private images)
       - name: Log in to Docker Hub on EC2
         run: |
           echo "Logging in to Docker Hub..."
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-3-248-193-143.eu-west-1.compute.amazonaws.com "echo '${{ secrets.DOCKER_HUB_TOKEN }}' | docker login -u '${{ secrets.DOCKER_HUB_USERNAME }}' --password-stdin"
 
-      # Step 6: Deploy to EC2
+      # Step 7: Deploy to EC2
       - name: Deploy to EC2
         run: |
           echo "Deploying to EC2..."
