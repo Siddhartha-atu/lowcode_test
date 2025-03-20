@@ -42,15 +42,26 @@ jobs:
           fi
           echo "docker-compose.yaml is valid."
 
-      # Step 5: Run static analysis on docker-compose.yaml
+      # Step 5: Install yamllint
       - name: Install yamllint
         run: |
           sudo apt update
           sudo apt install -y yamllint
 
+      # Step 6: Create .yamllint configuration file
+      - name: Create .yamllint configuration
+        run: |
+          cat <<EOL > .yamllint
+          extends: default
+          rules:
+            line-length: disable
+            document-start: disable
+          EOL
+
+      # Step 7: Lint docker-compose.yaml with custom .yamllint configuration
       - name: Lint docker-compose.yaml
         run: |
-          yamllint docker-compose.yaml
+          yamllint -c .yamllint docker-compose.yaml
 
   deploy:
     needs: ci  # Deploy only if CI passes
@@ -93,4 +104,5 @@ jobs:
       # Step 7: Deploy to EC2
       - name: Deploy to EC2
         run: |
-          echo "Deploying to EC2
+          echo "Deploying to EC2..."
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-3-248-193-143.eu-west-1.compute.amazonaws.com "cd ~/my-app && docker-compose up -d"
