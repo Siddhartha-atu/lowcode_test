@@ -23,19 +23,26 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      # Step 3: Log in to Docker Hub on EC2 (if using private images)
-      - name: Log in to Docker Hub on EC2
+      # Step 3: Write private key to a file
+      - name: Write private key to file
         run: |
-          echo "Logging in to Docker Hub..."
-          ssh -o StrictHostKeyChecking=no ubuntu@ec2-3-248-193-143.eu-west-1.compute.amazonaws.com "echo '${{ secrets.DOCKER_HUB_TOKEN }}' | docker login -u '${{ secrets.DOCKER_HUB_USERNAME }}' --password-stdin"
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/lowcode.pem
+          chmod 600 ~/.ssh/lowcode.pem
 
       # Step 4: Copy docker-compose.yaml to EC2
       - name: Copy docker-compose.yaml to EC2
         run: |
-          scp -o StrictHostKeyChecking=no -i ${{ secrets.SSH_PRIVATE_KEY }} docker-compose.yaml ubuntu@ec2-3-248-193-143.eu-west-1.compute.amazonaws.com:~/my-app/
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem docker-compose.yaml ubuntu@ec2-3-248-193-143.eu-west-1.compute.amazonaws.com:~/my-app/
 
-      # Step 5: Deploy to EC2
+      # Step 5: Log in to Docker Hub on EC2 (if using private images)
+      - name: Log in to Docker Hub on EC2
+        run: |
+          echo "Logging in to Docker Hub..."
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-3-248-193-143.eu-west-1.compute.amazonaws.com "echo '${{ secrets.DOCKER_HUB_TOKEN }}' | docker login -u '${{ secrets.DOCKER_HUB_USERNAME }}' --password-stdin"
+
+      # Step 6: Deploy to EC2
       - name: Deploy to EC2
         run: |
           echo "Deploying to EC2..."
-          ssh -o StrictHostKeyChecking=no ubuntu@ec2-3-248-193-143.eu-west-1.compute.amazonaws.com "cd ~/my-app && docker-compose pull && docker-compose up -d"
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-3-248-193-143.eu-west-1.compute.amazonaws.com "cd ~/my-app && docker-compose pull && docker-compose up -d"
