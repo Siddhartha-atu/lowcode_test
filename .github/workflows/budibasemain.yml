@@ -28,15 +28,15 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      # Step 4: Build Docker images
-      - name: Build Docker images
+      # Step 4: Build Docker image
+      - name: Build Docker image
         run: |
-          docker compose -f docker-compose.yaml build
+          docker build -t your-dockerhub-username/your-app-name:latest .
 
-      # Step 5: Push Docker images
-      - name: Push Docker images
+      # Step 5: Push Docker image to Docker Hub
+      - name: Push Docker image to Docker Hub
         run: |
-          docker compose -f docker-compose.yaml push
+          docker push your-dockerhub-username/your-app-name:latest
 
   deploy:
     needs: build
