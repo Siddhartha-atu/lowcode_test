@@ -106,3 +106,9 @@ jobs:
         run: |
           echo "Deploying to EC2..."
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com "cd ~/my-app && docker-compose up -d"
+      
+      #Step 8: Import the Budibase app
+      - name: Import Budibase app
+        run: |
+          echo "Importing Budibase app..."
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com "cd ~/my-app && budi apps --import *.tar.gz"
