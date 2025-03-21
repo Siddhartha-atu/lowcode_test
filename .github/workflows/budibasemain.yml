@@ -63,7 +63,7 @@ jobs:
         run: |
           yamllint -c .yamllint docker-compose.yaml
 
-    deploy:
+  deploy:
     needs: ci  # Deploy only if CI passes
     runs-on: ubuntu-latest
 
@@ -107,11 +107,15 @@ jobs:
           echo "Deploying to EC2..."
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com "cd ~/my-app && docker-compose up -d"
 
-      # Step 8: Install Budibase CLI on EC2
-      - name: Install Budibase CLI on EC2
+      # Step 8: Install Node.js and Budibase CLI on EC2
+      - name: Install Node.js and Budibase CLI on EC2
         run: |
-          echo "Installing Budibase CLI..."
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com "sudo npm install -g @budibase/cli"
+          echo "Installing Node.js and Budibase CLI..."
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com << 'EOF'
+          curl -fsSL https://deb.nodesource.com/setup_16.x | sudo -E bash -
+          sudo apt-get install -y nodejs
+          sudo npm install -g @budibase/cli
+          EOF
 
       # Step 9: Import the Budibase app
       - name: Import Budibase app
