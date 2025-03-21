@@ -63,7 +63,7 @@ jobs:
         run: |
           yamllint -c .yamllint docker-compose.yaml
 
-  deploy:
+    deploy:
     needs: ci  # Deploy only if CI passes
     runs-on: ubuntu-latest
 
@@ -90,10 +90,10 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com "mkdir -p ~/my-app"
 
-      # Step 5: Copy docker-compose.yaml to EC2
-      - name: Copy docker-compose.yaml to EC2
+      # Step 5: Copy files to EC2
+      - name: Copy files to EC2
         run: |
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem docker-compose.yaml ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com:~/my-app/
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem docker-compose.yaml .env *.tar.gz ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com:~/my-app/
 
       # Step 6: Log in to Docker Hub on EC2 (if using private images)
       - name: Log in to Docker Hub on EC2
@@ -106,8 +106,14 @@ jobs:
         run: |
           echo "Deploying to EC2..."
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com "cd ~/my-app && docker-compose up -d"
-      
-      #Step 8: Import the Budibase app
+
+      # Step 8: Install Budibase CLI on EC2
+      - name: Install Budibase CLI on EC2
+        run: |
+          echo "Installing Budibase CLI..."
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com "sudo npm install -g @budibase/cli"
+
+      # Step 9: Import the Budibase app
       - name: Import Budibase app
         run: |
           echo "Importing Budibase app..."
