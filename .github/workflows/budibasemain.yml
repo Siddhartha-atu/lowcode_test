@@ -15,6 +15,7 @@ env:
   WATCHTOWER_PORT: 6161
   BUDIBASE_ENVIRONMENT: DEVELOPMENT
   MAIN_PORT: 10000
+  COUCHDB_CLUSTER_SIZE: 1  # Force single-node mode
 
 jobs:
   validate:
@@ -34,7 +35,7 @@ jobs:
         image: redis
         ports:
           - 6379:6379
-        options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+        options: --health-cmd "redis-cli ping" --health-interval 10s
 
     steps:
       - uses: actions/checkout@v4
@@ -63,33 +64,45 @@ jobs:
           echo "PLUGINS_DIR=/plugins" >> .env.test
           echo "MINIO_ROOT_USER=minio" >> .env.test
           echo "MINIO_ROOT_PASSWORD=miniosecret" >> .env.test
+          echo "COUCHDB_CLUSTER_SIZE=1" >> .env.test  # Ensure single-node mode
 
       - name: Launch Budibase stack
         run: |
           docker-compose -f docker-compose.yaml --env-file .env.test up -d
           echo "Waiting for services to initialize..."
-          sleep 60
+          sleep 30  # Initial wait reduced since we'll check specifically
 
       - name: Initialize CouchDB
         run: |
-          echo "Checking if CouchDB is ready..."
-          until curl -s http://localhost:5984/_up | grep -q "true"; do
-            echo "Waiting for CouchDB..."
+          # Wait for CouchDB to be ready
+          echo "Waiting for CouchDB to be ready..."
+          until curl -s http://localhost:$COUCH_DB_PORT >/dev/null; do
             sleep 5
           done
-          
-          echo "Creating required databases..."
-          curl -X PUT http://admin:password@localhost:5984/_users
-          curl -X PUT http://admin:password@localhost:5984/_replicator
-          curl -X PUT http://admin:password@localhost:5984/_global_changes
 
-      - name: Verify health endpoint
+          # Create system databases
+          echo "Creating CouchDB system databases..."
+          curl -X PUT http://localhost:$COUCH_DB_PORT/_users
+          curl -X PUT http://localhost:$COUCH_DB_PORT/_replicator
+          curl -X PUT http://localhost:$COUCH_DB_PORT/_global_changes
+
+          # Verify databases were created
+          curl -s http://localhost:$COUCH_DB_PORT/_all_dbs | grep -q '_users' || { echo "Failed to create _users database"; exit 1; }
+          sleep 10  # Additional wait for complete initialization
+
+      - name: Verify service health
         run: |
-          # Try both the health endpoint and root URL
+          # Check CouchDB
+          if ! curl -s http://localhost:$COUCH_DB_PORT | grep -q couchdb; then
+            echo "CouchDB health check failed"
+            docker-compose -f docker-compose.yaml logs couchdb
+            exit 1
+          fi
+
+          # Check main Budibase health endpoint
           if curl -s http://localhost:$MAIN_PORT/api/health | grep -q "OK" || \
              curl -sIf http://localhost:$MAIN_PORT | grep -q "200"; then
             echo "Health check passed"
-            exit 0
           else
             echo "Health check failed"
             docker-compose -f docker-compose.yaml logs
