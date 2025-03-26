@@ -24,15 +24,15 @@ jobs:
       
       - name: Validate configuration files
         run: |
-          # Check for docker-compose.yaml (note the .yaml extension)
+          # Check for docker-compose.yaml
           if [ ! -f docker-compose.yaml ]; then
             echo "Error: docker-compose.yaml file is missing"
             exit 1
           fi
           
-          # Check for .env (for CI/CD safety)
+          # Check for .env
           if [ ! -f .env ]; then
-            echo "Error: .env file is missing - create one based on your .env but with placeholder values"
+            echo "Error: .env file is missing"
             exit 1
           fi
 
@@ -44,9 +44,7 @@ jobs:
         image: redis
         ports:
           - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
+        options: --health-cmd "redis-cli ping" --health-interval 10s
       
       minio:
         image: minio/minio
@@ -55,16 +53,13 @@ jobs:
           MINIO_SECRET_KEY: miniosecret
         ports:
           - 9000:9000
-        options: >-
-          server /data
-          --console-address ":9001"
+        options: --address ":9000" --console-address ":9001"
 
     steps:
       - uses: actions/checkout@v4
       
       - name: Create test environment file
         run: |
-          # Create .env.test from .env but with test values
           cp .env .env.test
           sed -i 's/^API_ENCRYPTION_KEY=.*/API_ENCRYPTION_KEY=test_encryption_key/' .env.test
           sed -i 's/^JWT_SECRET=.*/JWT_SECRET=test_jwt_secret/' .env.test
@@ -78,11 +73,11 @@ jobs:
       - name: Launch Budibase stack
         run: |
           docker-compose -f docker-compose.yaml --env-file .env.test up -d
-          sleep 30  # Wait for services to initialize
+          sleep 30
 
       - name: Verify health endpoint
         run: |
-          curl -s http://localhost:$MAIN_PORT/api/health | grep "OK" || exit 1
+          curl -s http://localhost:10000/api/health | grep "OK" || exit 1
 
       - name: Clean up resources
         if: always()
