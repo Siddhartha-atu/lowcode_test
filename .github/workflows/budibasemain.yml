@@ -40,6 +40,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      # Install Docker Compose
+      - name: Install Docker Compose
+        run: |
+          sudo curl -L "https://github.com/docker/compose/releases/download/v2.23.3/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+          docker-compose --version
+
       - name: Set up MinIO
         run: |
           docker run -d \
@@ -76,5 +83,5 @@ jobs:
         if: always()
         run: |
           docker-compose -f docker-compose.yaml down
-          docker stop minio
-          docker rm minio
+          docker stop minio || true
+          docker rm minio || true
