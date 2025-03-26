@@ -1,4 +1,4 @@
-name: Budibase Deployment
+name: Deploy Budibase App
 
 on:
   push:
@@ -7,63 +7,79 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    services:
-      redis:
-        image: redis
-        ports:
-          - 6379:6379
-        options: --health-cmd "redis-cli ping" --health-interval 10s
-
+    env:
+      APP_TAR: Change Request-export-1742513993388.tar.gz
+    
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Docker Compose
+    - name: Setup environment
       run: |
+        # Use .env.test if exists, otherwise create minimal one
+        if [ ! -f .env.test ]; then
+          echo "Creating minimal .env.test..."
+          echo "COUCH_DB_USER=admin" >> .env.test
+          echo "COUCH_DB_PASSWORD=password" >> .env.test
+          echo "MINIO_ACCESS_KEY=minio" >> .env.test
+          echo "MINIO_SECRET_KEY=miniosecret" >> .env.test
+          echo "MAIN_PORT=10000" >> .env.test
+        fi
+        cp .env.test .env
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y curl jq
         sudo curl -L "https://github.com/docker/compose/releases/download/v2.23.3/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
         sudo chmod +x /usr/local/bin/docker-compose
 
-    - name: Start Services
+    - name: Start services
       run: |
-        cp .env.test .env
         docker-compose up -d
-        sleep 30  # Initial wait
+        sleep 20  # Initial wait
 
     - name: Initialize CouchDB
       run: |
         # Wait for CouchDB
-        timeout 120 bash -c 'until curl -s http://admin:password@localhost:5984 >/dev/null; do
-          docker-compose logs couchdb-service --tail=10
+        timeout 120 bash -c 'until curl -s http://admin:$COUCH_DB_PASSWORD@localhost:5984 >/dev/null; do
+          echo "Waiting for CouchDB..."
+          docker-compose logs couchdb-service --tail=5
           sleep 10
         done'
         
         # Create system databases
-        curl -X PUT http://admin:password@localhost:5984/_users
-        curl -X PUT http://admin:password@localhost:5984/_replicator
+        curl -X PUT http://admin:$COUCH_DB_PASSWORD@localhost:5984/_users
+        curl -X PUT http://admin:$COUCH_DB_PASSWORD@localhost:5984/_replicator
 
-    - name: Import Application
+    - name: Import application
       run: |
-        # Get admin token
-        TOKEN=$(curl -s -X POST \
-          -H "Content-Type: application/json" \
-          -d '{"email":"admin@example.com","password":"admin123"}' \
-          http://localhost:10000/api/global/auth/login | jq -r '.token')
+        # Get admin token (retry up to 3 times)
+        for i in {1..3}; do
+          TOKEN=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"email":"admin@example.com","password":"admin123"}' \
+            http://localhost:10000/api/global/auth/login | jq -r '.token')
+          
+          [ -n "$TOKEN" ] && break || sleep 10
+        done
         
-        # Import app
-        curl -X POST \
+        # Import the app
+        curl -v -X POST \
           -H "Authorization: Bearer $TOKEN" \
-          -F "file=@apps/your-app.tar.gz" \
+          -F "file=@$APP_TAR" \
           http://localhost:10000/api/builder/import
 
-    - name: Verify Deployment
+    - name: Verify deployment
       run: |
-        # Check main endpoint
-        curl -sIf http://localhost:10000
-        # Check app exists
-        curl -s http://localhost:10000/api/public/apps | jq
+        # Check health endpoint
+        curl -s http://localhost:10000/api/health | grep -q "OK" || (docker-compose logs; exit 1)
+        echo "Deployment successful!"
 
-    - name: Cleanup (on failure)
+    - name: Cleanup on failure
       if: failure()
       run: |
-        docker-compose logs --no-color > docker_logs.txt
-        docker-compose down -v
-        echo "::set-output name=logs::$(cat docker_logs.txt)"
+        docker-compose logs --no-color > logs.txt
+        echo "::group::Container Logs"
+        cat logs.txt
+        echo "::endgroup::"
+        exit 1
