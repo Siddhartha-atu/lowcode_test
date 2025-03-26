@@ -13,7 +13,7 @@ env:
   COUCH_DB_PORT: 4005
   REDIS_PORT: 6379
   MAIN_PORT: 10000
-  TEST_MODE: "full"  # Change to "minimal" for quick tests
+  TEST_MODE: "minimal"  # Change to "minimal" for quick tests
 
 jobs:
   test:
