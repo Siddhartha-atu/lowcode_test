@@ -34,7 +34,7 @@ jobs:
         image: redis
         ports:
           - 6379:6379
-        options: --health-cmd "redis-cli ping" --health-interval 10s
+        options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -69,6 +69,19 @@ jobs:
           docker-compose -f docker-compose.yaml --env-file .env.test up -d
           echo "Waiting for services to initialize..."
           sleep 60
+
+      - name: Initialize CouchDB
+        run: |
+          echo "Checking if CouchDB is ready..."
+          until curl -s http://localhost:5984/_up | grep -q "true"; do
+            echo "Waiting for CouchDB..."
+            sleep 5
+          done
+          
+          echo "Creating required databases..."
+          curl -X PUT http://admin:password@localhost:5984/_users
+          curl -X PUT http://admin:password@localhost:5984/_replicator
+          curl -X PUT http://admin:password@localhost:5984/_global_changes
 
       - name: Verify health endpoint
         run: |
