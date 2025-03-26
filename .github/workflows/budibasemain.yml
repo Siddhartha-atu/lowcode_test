@@ -24,17 +24,8 @@ jobs:
       
       - name: Validate configuration files
         run: |
-          # Check for docker-compose.yaml
-          if [ ! -f docker-compose.yaml ]; then
-            echo "Error: docker-compose.yaml file is missing"
-            exit 1
-          fi
-          
-          # Check for .env
-          if [ ! -f .env ]; then
-            echo "Error: .env file is missing"
-            exit 1
-          fi
+          [ -f docker-compose.yaml ] || { echo "Missing docker-compose.yaml"; exit 1; }
+          [ -f .env ] || { echo "Missing .env file"; exit 1; }
 
   test:
     needs: validate
@@ -45,19 +36,21 @@ jobs:
         ports:
           - 6379:6379
         options: --health-cmd "redis-cli ping" --health-interval 10s
-      
-      minio:
-        image: minio/minio
-        env:
-          MINIO_ACCESS_KEY: minio
-          MINIO_SECRET_KEY: miniosecret
-        ports:
-          - 9000:9000
-        options: --address ":9000" --console-address ":9001"
 
     steps:
       - uses: actions/checkout@v4
       
+      - name: Set up MinIO
+        run: |
+          docker run -d \
+            --name minio \
+            -p 9000:9000 \
+            -p 9001:9001 \
+            -e "MINIO_ACCESS_KEY=minio" \
+            -e "MINIO_SECRET_KEY=miniosecret" \
+            minio/minio server /data --console-address ":9001"
+          sleep 10
+
       - name: Create test environment file
         run: |
           cp .env .env.test
@@ -83,3 +76,5 @@ jobs:
         if: always()
         run: |
           docker-compose -f docker-compose.yaml down
+          docker stop minio
+          docker rm minio
