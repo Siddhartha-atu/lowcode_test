@@ -1,120 +1,65 @@
-name: CI/CD Pipeline
+name: Budibase Development CI/CD
 
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+on: [push]
 
 jobs:
-  ci:
+  validate:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Validate configuration
+        run: |
+          # Check critical files exist
+          [ -f docker-compose.yml ] || { echo "Missing docker-compose.yml"; exit 1; }
+          [ -f .env.example ] || { echo "Missing .env.example"; exit 1; }
+          
+          # Verify placeholder values in .env.example
+          grep "CHANGEME" .env.example || { 
+            echo "Warning: No placeholder values found in .env.example";
+          }
+
+  test:
+    needs: validate
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis
+        ports: [6379:6379]
+      minio:
+        image: minio/minio
+        env:
+          MINIO_ACCESS_KEY: minio
+          MINIO_SECRET_KEY: miniosecret
+        ports: [9000:9000]
+        command: server /data
 
     steps:
-      # Step 1: Checkout the code
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+      
+      - name: Setup test environment
+        run: |
+          cp .env.example .env.test
+          sed -i 's/CHANGEME/minio/g' .env.test
+          sed -i 's/your_redis_password/budibase/g' .env.test
+          echo "TEST_MODE=true" >> .env.test
 
-      # Step 2: Install Docker Compose
-      - name: Install Docker Compose
+      - name: Run Budibase stack
         run: |
-          sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-          docker-compose --version
-      # Step 3: Validate .env file
-      - name: Validate .env file
+          docker-compose --env-file .env.test up -d
+          sleep 30  # Wait for services to initialize
+          
+      - name: Verify health
         run: |
-          if [ ! -f .env ]; then
-            echo "Error: .env file is missing!"
-            exit 1
-          fi
-          echo ".env file exists and is valid."
-      # Step 4: Validate docker-compose.yaml file
-      - name: Validate docker-compose.yaml
-        run: |
-          if ! docker-compose config; then
-            echo "Error: docker-compose.yaml is invalid!"
-            exit 1
-          fi
-          echo "docker-compose.yaml is valid."
-      # Step 5: Install yamllint
-      - name: Install yamllint
-        run: |
-          sudo apt update
-          sudo apt install -y yamllint
-      # Step 6: Create .yamllint configuration file
-      - name: Create .yamllint configuration
-        run: |
-          cat <<EOL > .yamllint
-          extends: default
-          rules:
-            line-length: disable
-            document-start: disable
-          EOL
-      # Step 7: Lint docker-compose.yaml with custom .yamllint configuration
-      - name: Lint docker-compose.yaml
-        run: |
-          yamllint -c .yamllint docker-compose.yaml
-
-  deploy:
-    needs: ci
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up SSH
-        uses: webfactory/ssh-agent@v0.7.0
+          curl -s http://localhost:10000/api/health | grep "OK" || exit 1
+          
+      - name: Capture screenshots
+        if: always()
+        uses: actions/upload-artifact@v3
         with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-
-      - name: Write private key to file
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/lowcode.pem
-          chmod 600 ~/.ssh/lowcode.pem
-
-      - name: Install Docker and Budibase on EC2
-        run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com << 'EOF'
-          # Install Docker
-          sudo apt-get update
-          sudo apt-get install -y docker.io
-          sudo systemctl enable docker
-          sudo systemctl start docker
-          sudo usermod -aG docker ubuntu
-
-          # Install Docker Compose
-          sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-
-          # Create directory for Budibase
-          mkdir -p ~/budibase
-          EOF
-
-      - name: Copy files to EC2
-        run: |
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem docker-compose.yaml ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com:~/budibase/
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem .env ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com:~/budibase/
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem your-app.tar.gz ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com:~/budibase/
-
-      - name: Start Budibase and import app
-        run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-54-74-97-194.eu-west-1.compute.amazonaws.com << 'EOF'
-          cd ~/budibase
-          docker-compose up -d
-
-          # Wait for Budibase to start
-          sleep 30
-
-          # Import the app
-          docker exec budibase cli apps --import your-app.tar.gz
-          EOF
-
-      - name: Get Public URL
-        run: |
-          echo "Budibase should now be running at:"
-          echo "http://ec2-54-74-97-194.eu-west-1.compute.amazonaws.com:10000"
+          name: budibase-screenshots
+          path: |
+            screenshots/
+            
+      - name: Tear down
+        run: docker-compose down
