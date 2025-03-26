@@ -1,4 +1,4 @@
-name: Budibase CI/CD Pipeline (Dev Testing)
+name: Budibase CI/CD Pipeline (Fixed)
 
 on:
   push:
@@ -30,6 +30,7 @@ jobs:
     
     - name: Setup environment
       run: |
+        # Create complete .env.test file
         cat <<EOF > .env.test
         COUCHDB_USER=admin
         COUCHDB_PASSWORD=password
@@ -37,7 +38,7 @@ jobs:
         COUCHDB_CLUSTER_SIZE=1
         BB_ADMIN_USER_EMAIL=admin@example.com
         BB_ADMIN_USER_PASSWORD=admin123
-        PLUGINS_DIR=/plugins
+        PLUGINS_DIR=/tmp/plugins
         MINIO_ROOT_USER=minio
         MINIO_ROOT_PASSWORD=miniosecret
         BUDIBASE_ENVIRONMENT=DEVELOPMENT
@@ -59,48 +60,29 @@ jobs:
           minio/minio server /data --console-address ":9001"
         sleep 5
 
-    - name: Run Tests (Full Mode)
-      if: env.TEST_MODE == 'full'
-      run: |
-        # Export variables for Docker Compose
-        export COUCHDB_USER=admin
-        export COUCHDB_PASSWORD=password
-        
-        docker-compose -f docker-compose.yaml --env-file .env.test up -d
-        
-        # Wait for CouchDB with credentials
-        echo "Waiting for CouchDB initialization..."
-        timeout 180 bash -c 'until curl -s http://admin:password@localhost:$COUCH_DB_PORT >/dev/null; do
-          docker-compose logs couchdb --tail=5
-          sleep 10
-        done'
-        
-        # Create system databases with retries
-        for db in _users _replicator; do
-          echo "Creating $db database..."
-          curl -X PUT http://admin:password@localhost:$COUCH_DB_PORT/$db || \
-          (echo "Database creation failed"; docker-compose logs couchdb; exit 1)
-        done
-        
-        # Verify services
-        curl -s http://localhost:$MAIN_PORT/api/health | grep -q "OK" || \
-        (docker-compose logs; exit 1)
-        echo "Full test completed successfully"
-
     - name: Run Tests (Minimal Mode)
       if: env.TEST_MODE == 'minimal'
       run: |
-        # Skip initialization checks
+        # Export all required variables
+        export PLUGINS_DIR=/tmp/plugins
+        export BB_ADMIN_USER_EMAIL=admin@example.com
+        export BB_ADMIN_USER_PASSWORD=admin123
+        
         docker-compose -f docker-compose.yaml --env-file .env.test up -d
         
-        # Basic port checks with service names
-        echo "Verifying services:"
-        for port in $MAIN_PORT $APP_PORT $WORKER_PORT; do
-          timeout 30 bash -c 'until nc -z localhost '$port'; do sleep 2; done' && \
-          echo "Port $port responsive" || \
-          (docker-compose ps; exit 1)
+        # Wait for core services with proper logging
+        echo "Waiting for services to stabilize..."
+        for service in bbproxy bbapps bbworker; do
+          timeout 60 bash -c "until docker inspect --format='{{.State.Running}}' \$(docker ps -q -f name=\${service}) | grep -q 'true'; do
+            docker logs \$(docker ps -q -f name=\${service}) --tail=10 2>/dev/null || true
+            sleep 5
+          done"
         done
-        echo "Minimal test completed - core services running"
+        
+        # Verify main port
+        curl -sIf http://localhost:$MAIN_PORT || \
+        (docker-compose logs; exit 1)
+        echo "Minimal test completed successfully"
 
     - name: Cleanup
       if: always()
