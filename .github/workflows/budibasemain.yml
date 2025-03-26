@@ -7,6 +7,7 @@ on:
     branches: [main]
 
 env:
+  # Non-secret environment variables
   APP_PORT: 4002
   WORKER_PORT: 4003
   MINIO_PORT: 4004
@@ -21,10 +22,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Validate configuration
+      - name: Validate configuration files
         run: |
-          [ -f docker-compose.yaml ] || { echo "Missing docker-compose.yml"; exit 1; }
-          [ -f .env.example ] || { echo "Missing .env.example"; exit 1; }
+          # Check for docker-compose.yaml (note the .yaml extension)
+          if [ ! -f docker-compose.yaml ]; then
+            echo "Error: docker-compose.yaml file is missing"
+            exit 1
+          fi
+          
+          # Check for .env.example (for CI/CD safety)
+          if [ ! -f .env.example ]; then
+            echo "Error: .env.example file is missing - create one based on your .env but with placeholder values"
+            exit 1
+          fi
 
   test:
     needs: validate
@@ -52,22 +62,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Set up test environment
+      - name: Create test environment file
         run: |
+          # Create .env.test from .env.example but with test values
           cp .env.example .env.test
-          sed -i 's/=CHANGEME/=testvalue/g' .env.test
-          sed -i 's/your_redis_password/testpassword/g' .env.test
+          sed -i 's/^API_ENCRYPTION_KEY=.*/API_ENCRYPTION_KEY=test_encryption_key/' .env.test
+          sed -i 's/^JWT_SECRET=.*/JWT_SECRET=test_jwt_secret/' .env.test
+          sed -i 's/^MINIO_ACCESS_KEY=.*/MINIO_ACCESS_KEY=minio/' .env.test
+          sed -i 's/^MINIO_SECRET_KEY=.*/MINIO_SECRET_KEY=miniosecret/' .env.test
+          sed -i 's/^REDIS_PASSWORD=.*/REDIS_PASSWORD=testpassword/' .env.test
+          sed -i 's/^INTERNAL_API_KEY=.*/INTERNAL_API_KEY=test_internal_key/' .env.test
+          sed -i 's/^COUCH_DB_PASSWORD=.*/COUCH_DB_PASSWORD=test_couchdb_pass/' .env.test
           echo "TEST_MODE=true" >> .env.test
 
-      - name: Run Budibase stack
+      - name: Launch Budibase stack
         run: |
-          docker-compose --env-file .env.test up -d
-          sleep 30
+          docker-compose -f docker-compose.yaml --env-file .env.test up -d
+          sleep 30  # Wait for services to initialize
 
-      - name: Verify health
+      - name: Verify health endpoint
         run: |
-          curl -s http://localhost:10000/api/health | grep "OK" || exit 1
+          curl -s http://localhost:$MAIN_PORT/api/health | grep "OK" || exit 1
 
-      - name: Clean up
+      - name: Clean up resources
         if: always()
-        run: docker-compose down
+        run: |
+          docker-compose -f docker-compose.yaml down
