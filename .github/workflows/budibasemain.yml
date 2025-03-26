@@ -45,7 +45,9 @@ jobs:
           MINIO_SECRET_KEY: miniosecret
         ports:
           - 9000:9000
-        command: server /data
+        options: >-
+          server /data
+          --console-address ":9001"
 
     steps:
       - uses: actions/checkout@v4
