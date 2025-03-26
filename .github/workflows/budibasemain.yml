@@ -1,6 +1,19 @@
-name: Budibase Development CI/CD
+name: Budibase CI/CD Pipeline
 
-on: [push]
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  APP_PORT: 4002
+  WORKER_PORT: 4003
+  MINIO_PORT: 4004
+  COUCH_DB_PORT: 4005
+  REDIS_PORT: 6379
+  WATCHTOWER_PORT: 6161
+  BUDIBASE_ENVIRONMENT: DEVELOPMENT
 
 jobs:
   validate:
@@ -10,14 +23,8 @@ jobs:
       
       - name: Validate configuration
         run: |
-          # Check critical files exist
           [ -f docker-compose.yml ] || { echo "Missing docker-compose.yml"; exit 1; }
           [ -f .env.example ] || { echo "Missing .env.example"; exit 1; }
-          
-          # Verify placeholder values in .env.example
-          grep "CHANGEME" .env.example || { 
-            echo "Warning: No placeholder values found in .env.example";
-          }
 
   test:
     needs: validate
@@ -25,41 +32,40 @@ jobs:
     services:
       redis:
         image: redis
-        ports: [6379:6379]
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+      
       minio:
         image: minio/minio
         env:
           MINIO_ACCESS_KEY: minio
           MINIO_SECRET_KEY: miniosecret
-        ports: [9000:9000]
+        ports:
+          - 9000:9000
         command: server /data
 
     steps:
       - uses: actions/checkout@v4
       
-      - name: Setup test environment
+      - name: Set up test environment
         run: |
           cp .env.example .env.test
-          sed -i 's/CHANGEME/minio/g' .env.test
-          sed -i 's/your_redis_password/budibase/g' .env.test
+          sed -i 's/=CHANGEME/=testvalue/g' .env.test
+          sed -i 's/your_redis_password/testpassword/g' .env.test
           echo "TEST_MODE=true" >> .env.test
 
       - name: Run Budibase stack
         run: |
           docker-compose --env-file .env.test up -d
-          sleep 30  # Wait for services to initialize
-          
+          sleep 30
+
       - name: Verify health
         run: |
           curl -s http://localhost:10000/api/health | grep "OK" || exit 1
-          
-      - name: Capture screenshots
+
+      - name: Clean up
         if: always()
-        uses: actions/upload-artifact@v3
-        with:
-          name: budibase-screenshots
-          path: |
-            screenshots/
-            
-      - name: Tear down
         run: docker-compose down
