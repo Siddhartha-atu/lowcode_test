@@ -23,7 +23,7 @@ jobs:
       
       - name: Validate configuration
         run: |
-          [ -f docker-compose.yml ] || { echo "Missing docker-compose.yml"; exit 1; }
+          [ -f docker-compose.yaml ] || { echo "Missing docker-compose.yml"; exit 1; }
           [ -f .env.example ] || { echo "Missing .env.example"; exit 1; }
 
   test:
