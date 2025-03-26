@@ -14,15 +14,14 @@ env:
   REDIS_PORT: 6379
   WATCHTOWER_PORT: 6161
   BUDIBASE_ENVIRONMENT: DEVELOPMENT
-  MAIN_PORT: 10000  # Added this line
+  MAIN_PORT: 10000
 
 jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Validate configuration files
+      - name: Validate configuration
         run: |
           [ -f docker-compose.yaml ] || { echo "Missing docker-compose.yaml"; exit 1; }
           [ -f .env ] || { echo "Missing .env file"; exit 1; }
@@ -52,49 +51,45 @@ jobs:
             --name minio \
             -p 9000:9000 \
             -p 9001:9001 \
-            -e "MINIO_ACCESS_KEY=minio" \
-            -e "MINIO_SECRET_KEY=miniosecret" \
+            -e "MINIO_ROOT_USER=minio" \
+            -e "MINIO_ROOT_PASSWORD=miniosecret" \
             minio/minio server /data --console-address ":9001"
           sleep 10
 
-      - name: Create test environment file
+      - name: Create test environment
         run: |
           cp .env .env.test
-          sed -i 's/^API_ENCRYPTION_KEY=.*/API_ENCRYPTION_KEY=test_encryption_key/' .env.test
-          sed -i 's/^JWT_SECRET=.*/JWT_SECRET=test_jwt_secret/' .env.test
-          sed -i 's/^MINIO_ACCESS_KEY=.*/MINIO_ACCESS_KEY=minio/' .env.test
-          sed -i 's/^MINIO_SECRET_KEY=.*/MINIO_SECRET_KEY=miniosecret/' .env.test
-          sed -i 's/^REDIS_PASSWORD=.*/REDIS_PASSWORD=testpassword/' .env.test
-          sed -i 's/^INTERNAL_API_KEY=.*/INTERNAL_API_KEY=test_internal_key/' .env.test
-          sed -i 's/^COUCH_DB_PASSWORD=.*/COUCH_DB_PASSWORD=test_couchdb_pass/' .env.test
           echo "TEST_MODE=true" >> .env.test
+          echo "MINIO_ROOT_USER=minio" >> .env.test
+          echo "MINIO_ROOT_PASSWORD=miniosecret" >> .env.test
 
       - name: Launch Budibase stack
         run: |
           docker-compose -f docker-compose.yaml --env-file .env.test up -d
-          echo "Waiting for services to start..."
-          sleep 30
+          echo "Waiting for services to initialize..."
+          sleep 45
 
-      - name: Debug running containers
+      - name: Debug services
         run: |
           docker ps -a
           docker-compose -f docker-compose.yaml logs
-          docker logs minio || true
+          curl -v http://localhost:10000 || true
+          docker inspect bbproxy | grep -A 10 "Ports"
 
-      - name: Verify health endpoint (with retries)
+      - name: Verify health endpoint
         run: |
-          for i in {1..5}; do
+          for i in {1..10}; do
             if curl -s http://localhost:$MAIN_PORT/api/health | grep -q "OK"; then
               echo "Health check passed"
               exit 0
             fi
-            echo "Health check attempt $i failed, retrying in 10 seconds..."
+            echo "Attempt $i/10: Health check failed, retrying in 10 seconds..."
             sleep 10
           done
-          echo "Health check failed after 5 attempts"
+          echo "Health check failed after 10 attempts"
           exit 1
 
-      - name: Clean up resources
+      - name: Clean up
         if: always()
         run: |
           docker-compose -f docker-compose.yaml down
