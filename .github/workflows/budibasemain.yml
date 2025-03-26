@@ -15,7 +15,8 @@ env:
   WATCHTOWER_PORT: 6161
   BUDIBASE_ENVIRONMENT: DEVELOPMENT
   MAIN_PORT: 10000
-  COUCHDB_CLUSTER_SIZE: 1  # Force single-node mode
+  COUCHDB_CLUSTER_SIZE: 1
+  HEALTH_CHECK_TIMEOUT: 300  # 5 minutes max for health checks
 
 jobs:
   validate:
@@ -64,47 +65,98 @@ jobs:
           echo "PLUGINS_DIR=/plugins" >> .env.test
           echo "MINIO_ROOT_USER=minio" >> .env.test
           echo "MINIO_ROOT_PASSWORD=miniosecret" >> .env.test
-          echo "COUCHDB_CLUSTER_SIZE=1" >> .env.test  # Ensure single-node mode
+          echo "COUCHDB_CLUSTER_SIZE=1" >> .env.test
 
       - name: Launch Budibase stack
         run: |
           docker-compose -f docker-compose.yaml --env-file .env.test up -d
-          echo "Waiting for services to initialize..."
-          sleep 30  # Initial wait reduced since we'll check specifically
+          echo "Waiting for containers to be running..."
+          
+          # Wait for all containers to reach running state
+          timeout 180 bash -c 'until [ $(docker-compose -f docker-compose.yaml ps --services | wc -l) -eq $(docker-compose -f docker-compose.yaml ps --services --filter "status=running" | wc -l) ]; do
+            echo "$(date) - Containers not yet running: $(docker-compose -f docker-compose.yaml ps --services --filter "status=created")"
+            sleep 10
+          done' || (echo "Container startup timed out"; docker-compose -f docker-compose.yaml ps; docker-compose -f docker-compose.yaml logs; exit 1)
 
       - name: Initialize CouchDB
         run: |
-          # Wait for CouchDB to be ready
-          echo "Waiting for CouchDB to be ready..."
-          until curl -s http://localhost:$COUCH_DB_PORT >/dev/null; do
+          # Wait for CouchDB HTTP interface
+          echo "Waiting for CouchDB to respond..."
+          timeout 120 bash -c 'until curl -s http://localhost:$COUCH_DB_PORT >/dev/null; do
+            echo "$(date) - CouchDB not yet responding"
             sleep 5
+          done' || (echo "CouchDB startup timed out"; docker-compose -f docker-compose.yaml logs couchdb; exit 1)
+
+          # Create system databases with retries
+          for db in _users _replicator _global_changes; do
+            echo "Creating database $db..."
+            attempts=3
+            count=1
+            until [ $count -gt $attempts ]; do
+              if curl -s -X PUT http://localhost:$COUCH_DB_PORT/$db | grep -q '"ok":true'; then
+                echo "Database $db created successfully"
+                break
+              fi
+              echo "Attempt $count failed to create $db"
+              ((count++))
+              sleep 5
+            done
+            if [ $count -gt $attempts ]; then
+              echo "Failed to create $db after $attempts attempts"
+              docker-compose -f docker-compose.yaml logs couchdb
+              exit 1
+            fi
           done
 
-          # Create system databases
-          echo "Creating CouchDB system databases..."
-          curl -X PUT http://localhost:$COUCH_DB_PORT/_users
-          curl -X PUT http://localhost:$COUCH_DB_PORT/_replicator
-          curl -X PUT http://localhost:$COUCH_DB_PORT/_global_changes
-
-          # Verify databases were created
-          curl -s http://localhost:$COUCH_DB_PORT/_all_dbs | grep -q '_users' || { echo "Failed to create _users database"; exit 1; }
-          sleep 10  # Additional wait for complete initialization
+          # Verify all required databases exist
+          echo "Verifying databases..."
+          dbs=$(curl -s http://localhost:$COUCH_DB_PORT/_all_dbs)
+          for db in _users _replicator _global_changes; do
+            if [[ ! "$dbs" =~ "$db" ]]; then
+              echo "Database $db missing after creation attempt"
+              docker-compose -f docker-compose.yaml logs couchdb
+              exit 1
+            fi
+          done
+          sleep 15  # Additional stabilization time
 
       - name: Verify service health
         run: |
-          # Check CouchDB
-          if ! curl -s http://localhost:$COUCH_DB_PORT | grep -q couchdb; then
-            echo "CouchDB health check failed"
-            docker-compose -f docker-compose.yaml logs couchdb
-            exit 1
-          fi
+          # Function to check service readiness
+          check_service() {
+            local service=$1
+            local port=$2
+            local endpoint=${3:-/api/health}
+            local timeout=${4:-60}
+            local interval=5
+            local attempts=$((timeout/interval))
+            
+            echo "Checking $service health on port $port..."
+            for ((i=1; i<=attempts; i++)); do
+              if curl -sIf "http://localhost:$port$endpoint" | grep -q "200"; then
+                echo "$service is ready"
+                return 0
+              fi
+              echo "Attempt $i/$attempts: $service not ready yet"
+              sleep $interval
+            done
+            echo "$service failed to become ready after $timeout seconds"
+            docker-compose -f docker-compose.yaml logs $service
+            return 1
+          }
 
-          # Check main Budibase health endpoint
-          if curl -s http://localhost:$MAIN_PORT/api/health | grep -q "OK" || \
-             curl -sIf http://localhost:$MAIN_PORT | grep -q "200"; then
-            echo "Health check passed"
+          # Check critical services
+          check_service "CouchDB" $COUCH_DB_PORT / || exit 1
+          check_service "Main" $MAIN_PORT || exit 1
+          check_service "Apps" $APP_PORT || exit 1
+          check_service "Worker" $WORKER_PORT || exit 1
+
+          # Final health check
+          echo "Running final health check..."
+          if curl -s http://localhost:$MAIN_PORT/api/health | grep -q "OK"; then
+            echo "All systems operational"
           else
-            echo "Health check failed"
+            echo "Final health check failed"
             docker-compose -f docker-compose.yaml logs
             exit 1
           fi
@@ -112,6 +164,8 @@ jobs:
       - name: Clean up
         if: always()
         run: |
-          docker-compose -f docker-compose.yaml down
+          echo "Cleaning up containers..."
+          docker-compose -f docker-compose.yaml down -v
           docker stop minio || true
           docker rm minio || true
+          echo "Cleanup complete"
