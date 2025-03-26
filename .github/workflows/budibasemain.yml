@@ -1,22 +1,11 @@
-name: Budibase CI/CD Pipeline (Fixed)
+name: Budibase Deployment
 
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
-
-env:
-  APP_PORT: 4002
-  WORKER_PORT: 4003
-  MINIO_PORT: 4004
-  COUCH_DB_PORT: 4005
-  REDIS_PORT: 6379
-  MAIN_PORT: 10000
-  TEST_MODE: "minimal"  # "full" for complete tests
 
 jobs:
-  test:
+  deploy:
     runs-on: ubuntu-latest
     services:
       redis:
@@ -27,67 +16,54 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Setup environment
-      run: |
-        # Create complete .env.test file
-        cat <<EOF > .env.test
-        COUCHDB_USER=admin
-        COUCHDB_PASSWORD=password
-        COUCHDB_SECRET=secret
-        COUCHDB_CLUSTER_SIZE=1
-        BB_ADMIN_USER_EMAIL=admin@example.com
-        BB_ADMIN_USER_PASSWORD=admin123
-        PLUGINS_DIR=/tmp/plugins
-        MINIO_ROOT_USER=minio
-        MINIO_ROOT_PASSWORD=miniosecret
-        BUDIBASE_ENVIRONMENT=DEVELOPMENT
-        EOF
 
-    - name: Install Docker Compose
+    - name: Set up Docker Compose
       run: |
         sudo curl -L "https://github.com/docker/compose/releases/download/v2.23.3/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
         sudo chmod +x /usr/local/bin/docker-compose
 
-    - name: Start MinIO
+    - name: Start Services
       run: |
-        docker run -d \
-          --name minio \
-          -p 9000:9000 \
-          -p 9001:9001 \
-          -e "MINIO_ROOT_USER=minio" \
-          -e "MINIO_ROOT_PASSWORD=miniosecret" \
-          minio/minio server /data --console-address ":9001"
-        sleep 5
+        cp .env.test .env
+        docker-compose up -d
+        sleep 30  # Initial wait
 
-    - name: Run Tests (Minimal Mode)
-      if: env.TEST_MODE == 'minimal'
+    - name: Initialize CouchDB
       run: |
-        # Export all required variables
-        export PLUGINS_DIR=/tmp/plugins
-        export BB_ADMIN_USER_EMAIL=admin@example.com
-        export BB_ADMIN_USER_PASSWORD=admin123
+        # Wait for CouchDB
+        timeout 120 bash -c 'until curl -s http://admin:password@localhost:5984 >/dev/null; do
+          docker-compose logs couchdb-service --tail=10
+          sleep 10
+        done'
         
-        docker-compose -f docker-compose.yaml --env-file .env.test up -d
-        
-        # Wait for core services with proper logging
-        echo "Waiting for services to stabilize..."
-        for service in bbproxy bbapps bbworker; do
-          timeout 60 bash -c "until docker inspect --format='{{.State.Running}}' \$(docker ps -q -f name=\${service}) | grep -q 'true'; do
-            docker logs \$(docker ps -q -f name=\${service}) --tail=10 2>/dev/null || true
-            sleep 5
-          done"
-        done
-        
-        # Verify main port
-        curl -sIf http://localhost:$MAIN_PORT || \
-        (docker-compose logs; exit 1)
-        echo "Minimal test completed successfully"
+        # Create system databases
+        curl -X PUT http://admin:password@localhost:5984/_users
+        curl -X PUT http://admin:password@localhost:5984/_replicator
 
-    - name: Cleanup
-      if: always()
+    - name: Import Application
       run: |
-        docker-compose -f docker-compose.yaml down -v --remove-orphans
-        docker stop minio || true
-        docker rm minio || true
-        echo "Cleanup completed"
+        # Get admin token
+        TOKEN=$(curl -s -X POST \
+          -H "Content-Type: application/json" \
+          -d '{"email":"admin@example.com","password":"admin123"}' \
+          http://localhost:10000/api/global/auth/login | jq -r '.token')
+        
+        # Import app
+        curl -X POST \
+          -H "Authorization: Bearer $TOKEN" \
+          -F "file=@apps/your-app.tar.gz" \
+          http://localhost:10000/api/builder/import
+
+    - name: Verify Deployment
+      run: |
+        # Check main endpoint
+        curl -sIf http://localhost:10000
+        # Check app exists
+        curl -s http://localhost:10000/api/public/apps | jq
+
+    - name: Cleanup (on failure)
+      if: failure()
+      run: |
+        docker-compose logs --no-color > docker_logs.txt
+        docker-compose down -v
+        echo "::set-output name=logs::$(cat docker_logs.txt)"
