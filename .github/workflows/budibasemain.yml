@@ -16,7 +16,7 @@ env:
   BUDIBASE_ENVIRONMENT: DEVELOPMENT
   MAIN_PORT: 10000
   COUCHDB_CLUSTER_SIZE: 1
-  HEALTH_CHECK_TIMEOUT: 300  # 5 minutes max for health checks
+  HEALTH_CHECK_TIMEOUT: 300
 
 jobs:
   validate:
@@ -57,83 +57,101 @@ jobs:
             minio/minio server /data --console-address ":9001"
           sleep 10
 
-      - name: Create test environment
+      - name: Create test environment file
         run: |
-          cp .env .env.test
-          echo "BB_ADMIN_USER_EMAIL=admin@example.com" >> .env.test
-          echo "BB_ADMIN_USER_PASSWORD=adminpassword" >> .env.test
-          echo "PLUGINS_DIR=/plugins" >> .env.test
-          echo "MINIO_ROOT_USER=minio" >> .env.test
-          echo "MINIO_ROOT_PASSWORD=miniosecret" >> .env.test
-          echo "COUCHDB_CLUSTER_SIZE=1" >> .env.test
+          # Create a complete .env.test file with all required variables
+          cat <<EOF > .env.test
+          BB_ADMIN_USER_EMAIL=admin@example.com
+          BB_ADMIN_USER_PASSWORD=adminpassword
+          PLUGINS_DIR=/plugins
+          MINIO_ROOT_USER=minio
+          MINIO_ROOT_PASSWORD=miniosecret
+          COUCHDB_CLUSTER_SIZE=1
+          COUCHDB_USER=admin
+          COUCHDB_PASSWORD=password
+          COUCHDB_PORT=$COUCH_DB_PORT
+          APP_PORT=$APP_PORT
+          WORKER_PORT=$WORKER_PORT
+          MAIN_PORT=$MAIN_PORT
+          BUDIBASE_ENVIRONMENT=$BUDIBASE_ENVIRONMENT
+          EOF
 
       - name: Launch Budibase stack
         run: |
+          # Pass all environment variables explicitly
+          export BB_ADMIN_USER_EMAIL=admin@example.com
+          export BB_ADMIN_USER_PASSWORD=adminpassword
+          export PLUGINS_DIR=/plugins
+          export COUCHDB_CLUSTER_SIZE=1
+          
           docker-compose -f docker-compose.yaml --env-file .env.test up -d
           echo "Waiting for containers to be running..."
           
-          # Wait for all containers to reach running state
-          timeout 180 bash -c 'until [ $(docker-compose -f docker-compose.yaml ps --services | wc -l) -eq $(docker-compose -f docker-compose.yaml ps --services --filter "status=running" | wc -l) ]; do
-            echo "$(date) - Containers not yet running: $(docker-compose -f docker-compose.yaml ps --services --filter "status=created")"
+          # Extended wait time for all services
+          timeout 300 bash -c 'until [ $(docker-compose -f docker-compose.yaml ps --services | wc -l) -eq $(docker-compose -f docker-compose.yaml ps --services --filter "status=running" | wc -l) ]; do
+            echo "$(date) - Waiting for: $(docker-compose -f docker-compose.yaml ps --services --filter "status=created")"
             sleep 10
           done' || (echo "Container startup timed out"; docker-compose -f docker-compose.yaml ps; docker-compose -f docker-compose.yaml logs; exit 1)
 
       - name: Initialize CouchDB
         run: |
-          # Wait for CouchDB HTTP interface
+          # Wait for CouchDB with credentials
           echo "Waiting for CouchDB to respond..."
-          timeout 120 bash -c 'until curl -s http://localhost:$COUCH_DB_PORT >/dev/null; do
+          timeout 300 bash -c 'until curl -s http://admin:password@localhost:$COUCH_DB_PORT >/dev/null; do
             echo "$(date) - CouchDB not yet responding"
-            sleep 5
-          done' || (echo "CouchDB startup timed out"; docker-compose -f docker-compose.yaml logs couchdb; exit 1)
+            docker-compose -f docker-compose.yaml logs couchdb-service --tail=20
+            sleep 10
+          done' || (echo "CouchDB startup timed out"; docker-compose -f docker-compose.yaml logs couchdb-service; exit 1)
 
-          # Create system databases with retries
+          # Create system databases with authentication
           for db in _users _replicator _global_changes; do
             echo "Creating database $db..."
-            attempts=3
+            attempts=5
             count=1
             until [ $count -gt $attempts ]; do
-              if curl -s -X PUT http://localhost:$COUCH_DB_PORT/$db | grep -q '"ok":true'; then
+              if curl -s -X PUT http://admin:password@localhost:$COUCH_DB_PORT/$db | grep -q '"ok":true'; then
                 echo "Database $db created successfully"
                 break
               fi
               echo "Attempt $count failed to create $db"
+              docker-compose -f docker-compose.yaml logs couchdb-service --tail=10
               ((count++))
-              sleep 5
+              sleep 10
             done
             if [ $count -gt $attempts ]; then
               echo "Failed to create $db after $attempts attempts"
-              docker-compose -f docker-compose.yaml logs couchdb
+              docker-compose -f docker-compose.yaml logs couchdb-service
               exit 1
             fi
           done
 
           # Verify all required databases exist
           echo "Verifying databases..."
-          dbs=$(curl -s http://localhost:$COUCH_DB_PORT/_all_dbs)
+          dbs=$(curl -s http://admin:password@localhost:$COUCH_DB_PORT/_all_dbs)
           for db in _users _replicator _global_changes; do
             if [[ ! "$dbs" =~ "$db" ]]; then
               echo "Database $db missing after creation attempt"
-              docker-compose -f docker-compose.yaml logs couchdb
+              docker-compose -f docker-compose.yaml logs couchdb-service
               exit 1
             fi
           done
-          sleep 15  # Additional stabilization time
+          sleep 20  # Extended stabilization time
 
       - name: Verify service health
         run: |
-          # Function to check service readiness
+          # Function to check service readiness with auth if needed
           check_service() {
             local service=$1
             local port=$2
             local endpoint=${3:-/api/health}
-            local timeout=${4:-60}
-            local interval=5
+            local auth=${4:-""}
+            local timeout=${5:-120}
+            local interval=10
             local attempts=$((timeout/interval))
             
             echo "Checking $service health on port $port..."
             for ((i=1; i<=attempts; i++)); do
-              if curl -sIf "http://localhost:$port$endpoint" | grep -q "200"; then
+              if curl -sIf ${auth:+--user "$auth"} "http://localhost:$port$endpoint" | grep -q "200"; then
                 echo "$service is ready"
                 return 0
               fi
@@ -146,7 +164,7 @@ jobs:
           }
 
           # Check critical services
-          check_service "CouchDB" $COUCH_DB_PORT / || exit 1
+          check_service "CouchDB" $COUCH_DB_PORT / "admin:password" || exit 1
           check_service "Main" $MAIN_PORT || exit 1
           check_service "Apps" $APP_PORT || exit 1
           check_service "Worker" $WORKER_PORT || exit 1
@@ -165,7 +183,7 @@ jobs:
         if: always()
         run: |
           echo "Cleaning up containers..."
-          docker-compose -f docker-compose.yaml down -v
+          docker-compose -f docker-compose.yaml down -v --remove-orphans
           docker stop minio || true
           docker rm minio || true
           echo "Cleanup complete"
