@@ -13,7 +13,7 @@ env:
   COUCH_DB_PORT: 4005
   REDIS_PORT: 6379
   MAIN_PORT: 10000
-  TEST_MODE: "minimal"  # Change to "minimal" for quick tests
+  TEST_MODE: "minimal"  # "full" for complete tests
 
 jobs:
   test:
@@ -23,21 +23,24 @@ jobs:
         image: redis
         ports:
           - 6379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 10s
 
     steps:
     - uses: actions/checkout@v4
     
     - name: Setup environment
       run: |
-        # Create .env.test with all required variables
         cat <<EOF > .env.test
         COUCHDB_USER=admin
         COUCHDB_PASSWORD=password
+        COUCHDB_SECRET=secret
+        COUCHDB_CLUSTER_SIZE=1
         BB_ADMIN_USER_EMAIL=admin@example.com
         BB_ADMIN_USER_PASSWORD=admin123
         PLUGINS_DIR=/plugins
         MINIO_ROOT_USER=minio
         MINIO_ROOT_PASSWORD=miniosecret
+        BUDIBASE_ENVIRONMENT=DEVELOPMENT
         EOF
 
     - name: Install Docker Compose
@@ -59,36 +62,50 @@ jobs:
     - name: Run Tests (Full Mode)
       if: env.TEST_MODE == 'full'
       run: |
-        # Start services with proper initialization
+        # Export variables for Docker Compose
+        export COUCHDB_USER=admin
+        export COUCHDB_PASSWORD=password
+        
         docker-compose -f docker-compose.yaml --env-file .env.test up -d
         
-        # Wait for CouchDB
-        timeout 120 bash -c 'until curl -s http://admin:password@localhost:$COUCH_DB_PORT >/dev/null; do
-          echo "Waiting for CouchDB..."
-          sleep 5
+        # Wait for CouchDB with credentials
+        echo "Waiting for CouchDB initialization..."
+        timeout 180 bash -c 'until curl -s http://admin:password@localhost:$COUCH_DB_PORT >/dev/null; do
+          docker-compose logs couchdb --tail=5
+          sleep 10
         done'
         
-        # Create system databases
-        curl -X PUT http://admin:password@localhost:$COUCH_DB_PORT/_users
-        curl -X PUT http://admin:password@localhost:$COUCH_DB_PORT/_replicator
+        # Create system databases with retries
+        for db in _users _replicator; do
+          echo "Creating $db database..."
+          curl -X PUT http://admin:password@localhost:$COUCH_DB_PORT/$db || \
+          (echo "Database creation failed"; docker-compose logs couchdb; exit 1)
+        done
         
         # Verify services
-        curl -s http://localhost:$MAIN_PORT/api/health | grep -q "OK" || exit 1
+        curl -s http://localhost:$MAIN_PORT/api/health | grep -q "OK" || \
+        (docker-compose logs; exit 1)
         echo "Full test completed successfully"
 
     - name: Run Tests (Minimal Mode)
       if: env.TEST_MODE == 'minimal'
       run: |
-        # Start services without thorough checks
+        # Skip initialization checks
         docker-compose -f docker-compose.yaml --env-file .env.test up -d
         
-        # Just check if ports are open
-        timeout 30 bash -c 'until nc -z localhost $MAIN_PORT; do sleep 1; done'
-        echo "Minimal test completed - services are up"
+        # Basic port checks with service names
+        echo "Verifying services:"
+        for port in $MAIN_PORT $APP_PORT $WORKER_PORT; do
+          timeout 30 bash -c 'until nc -z localhost '$port'; do sleep 2; done' && \
+          echo "Port $port responsive" || \
+          (docker-compose ps; exit 1)
+        done
+        echo "Minimal test completed - core services running"
 
     - name: Cleanup
       if: always()
       run: |
-        docker-compose -f docker-compose.yaml down -v
+        docker-compose -f docker-compose.yaml down -v --remove-orphans
         docker stop minio || true
         docker rm minio || true
+        echo "Cleanup completed"
