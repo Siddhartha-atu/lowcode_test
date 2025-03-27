@@ -23,6 +23,7 @@ jobs:
           sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
           docker-compose --version
+
       # Step 3: Validate .env file
       - name: Validate .env file
         run: |
@@ -31,6 +32,7 @@ jobs:
             exit 1
           fi
           echo ".env file exists and is valid."
+      
       # Step 4: Validate docker-compose.yaml file
       - name: Validate docker-compose.yaml
         run: |
@@ -39,11 +41,13 @@ jobs:
             exit 1
           fi
           echo "docker-compose.yaml is valid."
+      
       # Step 5: Install yamllint
       - name: Install yamllint
         run: |
           sudo apt update
           sudo apt install -y yamllint
+      
       # Step 6: Create .yamllint configuration file
       - name: Create .yamllint configuration
         run: |
@@ -53,10 +57,12 @@ jobs:
             line-length: disable
             document-start: disable
           EOL
+      
       # Step 7: Lint docker-compose.yaml with custom .yamllint configuration
       - name: Lint docker-compose.yaml
         run: |
           yamllint -c .yamllint docker-compose.yaml
+  
   deploy:
     needs: ci  # Deploy only if CI passes
     runs-on: ubuntu-latest
@@ -78,20 +84,34 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/lowcode.pem
           chmod 600 ~/.ssh/lowcode.pem
-      # Step 4: Create the directory on EC2
+
+      # Step 4: Install Docker Compose on EC2
+      - name: Install Docker Compose on EC2
+        run: |
+          echo "Installing Docker Compose on EC2..."
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-52-215-250-161.eu-west-1.compute.amazonaws.com << 'EOF'
+            sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+            sudo chmod +x /usr/local/bin/docker-compose
+            docker-compose --version
+          EOF
+
+      # Step 5: Create directory on EC2 (if not already created)
       - name: Create directory on EC2
         run: |
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-52-215-250-161.eu-west-1.compute.amazonaws.com "mkdir -p ~/my-app"
-      # Step 5: Copy docker-compose.yaml to EC2
+
+      # Step 6: Copy docker-compose.yaml to EC2
       - name: Copy docker-compose.yaml to EC2
         run: |
           scp -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem docker-compose.yaml ubuntu@ec2-52-215-250-161.eu-west-1.compute.amazonaws.com:~/my-app/
-      # Step 6: Log in to Docker Hub on EC2 (if using private images)
+
+      # Step 7: Log in to Docker Hub on EC2 (if using private images)
       - name: Log in to Docker Hub on EC2
         run: |
           echo "Logging in to Docker Hub..."
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/lowcode.pem ubuntu@ec2-52-215-250-161.eu-west-1.compute.amazonaws.com "echo '${{ secrets.DOCKER_HUB_TOKEN }}' | docker login -u '${{ secrets.DOCKER_HUB_USERNAME }}' --password-stdin"
-      # Step 7: Deploy to EC2
+
+      # Step 8: Deploy to EC2
       - name: Deploy to EC2
         run: |
           echo "Deploying to EC2..."
